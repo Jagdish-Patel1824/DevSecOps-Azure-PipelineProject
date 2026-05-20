@@ -31,8 +31,6 @@ Monitoring Tools
 Application Stack
 
 * ASP.NET Core (.NET 10)
-* C#
-* Razor Pages
 
 ⸻
 
@@ -71,9 +69,6 @@ GitHub / Azure Repos → Azure Pipeline → SonarCloud → Trivy → Docker → 
 * AKS image pull authentication issue with ACR
 * Kubernetes LoadBalancer public IP quota issue
 * SonarCloud Quality Gate failure troubleshooting
-* Trivy installation and vulnerability scan issues
-* Kubernetes Service exposure configuration
-* Docker image tagging and versioning issues
 
 ⸻
 
@@ -81,9 +76,7 @@ GitHub / Azure Repos → Azure Pipeline → SonarCloud → Trivy → Docker → 
 
 See Project_Report.pdf for:
 
-* Architecture diagrams
 * Pipeline screenshots
 * AKS deployment
 * Azure Monitor dashboards
 * Security scanning reports
-* Troubleshooting steps
