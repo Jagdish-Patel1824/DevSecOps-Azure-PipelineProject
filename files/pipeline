@@ -1,0 +1,166 @@
+trigger:
+- main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  imageName: 'ecommerce-app'
+  acrName: 'jagdishacr.azurecr.io'
+  tag: '$(Build.BuildId)'
+
+stages:
+
+# ========================
+# STAGE 1: CODE SECURITY
+# ========================
+- stage: SecurityScan
+  jobs:
+  - job: SecurityChecks
+    steps:
+
+    # Install .NET SDK
+    - task: UseDotNet@2
+      inputs:
+        packageType: 'sdk'
+        version: '10.x'
+
+    # SonarCloud Prepare
+    - task: SonarCloudPrepare@4
+      inputs:
+        SonarCloud: 'SC1'
+        organization: 'jagdish-devops'
+        scannerMode: 'dotnet'
+        projectKey: 'ecommerceApp'
+        projectName: 'ecommerceApp'
+
+    # Restore
+    - script: dotnet restore
+      displayName: Restore
+
+    # Build
+    - script: dotnet build --configuration Release
+      displayName: Build
+
+    # Sonar Analyze
+    - task: SonarCloudAnalyze@4
+
+    # Sonar Publish
+    - task: SonarCloudPublish@4
+      inputs:
+        pollingTimeoutSec: '300'
+      continueOnError: false
+
+    # Install Trivy
+    - script: |
+        sudo apt-get update
+        sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+
+        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+
+        echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+
+        sudo apt-get update
+        sudo apt-get install -y trivy
+
+        trivy --version
+      displayName: Install Trivy
+
+    # Filesystem Scan
+    - script: |
+        trivy fs . --severity HIGH,CRITICAL --exit-code 1
+      displayName: Trivy Filesystem Scan
+
+# ========================
+# STAGE 2: BUILD & PUSH
+# ========================
+- stage: Build
+  dependsOn: SecurityScan
+
+  jobs:
+  - job: BuildPush
+    steps:
+
+    # Install Trivy again (new VM in new stage)
+    - script: |
+        sudo apt-get update
+        sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+
+        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+
+        echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+
+        sudo apt-get update
+        sudo apt-get install -y trivy
+
+        trivy --version
+      displayName: Install Trivy
+
+    # Build & Push Docker Image
+    - task: Docker@2
+      displayName: Build and Push Image
+      inputs:
+        containerRegistry: 'jagdishacr'
+        repository: '$(imageName)'
+        command: 'buildAndPush'
+        Dockerfile: '**/Dockerfile'
+        tags: |
+          latest
+          $(tag)
+
+    # Scan Docker Image
+    - script: |
+        trivy image --severity HIGH,CRITICAL --exit-code 1 $(acrName)/$(imageName):$(tag)
+      displayName: Trivy Image Scan
+
+# ========================
+# STAGE 3: DEPLOY
+# ========================
+- stage: Deploy
+  dependsOn: Build
+
+  jobs:
+  - job: DeployToAKS
+    steps:
+
+    # Attach ACR to AKS
+    - task: AzureCLI@2
+      displayName: Get AKS Credentials
+      inputs:
+        azureSubscription: 'S1'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          az aks get-credentials --resource-group G1 --name C1 --overwrite-existing
+    # Deploy to AKS
+    - task: Kubernetes@1
+      displayName: Deploy to AKS
+      inputs:
+        connectionType: 'Kubernetes Service Connection'
+        kubernetesServiceEndpoint: 'C1'
+        namespace: 'default'
+        command: apply
+        useConfigurationFile: true
+        configuration: 'k8s/'
+      
+    # Print External IP
+    - task: AzureCLI@2
+      displayName: Print Application URL
+      inputs:
+        azureSubscription: 'S1'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          echo "Waiting for External IP..."
+          for i in {1..15}; do
+          IP=$(kubectl get svc ecommerce-service \
+          -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+           if [ -n "$IP" ]; then
+          echo "========================================="
+          echo "Application is Live at: http://$IP"
+          echo "========================================="
+          break
+          fi
+          echo "Attempt $i - IP pending, waiting 10 seconds..."
+          sleep 10
+          done
